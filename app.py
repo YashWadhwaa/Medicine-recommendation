@@ -14,7 +14,7 @@ import pickle
 warnings.filterwarnings('ignore')
 
 # Load data
-df = pd.read_csv('Training.csv.zip')
+df = pd.read_csv('Training.csv')
 sym_des = pd.read_csv('Symptom-severity.csv')
 precautions = pd.read_csv('precautions_df.csv')
 workout = pd.read_csv('workout_df.csv')
