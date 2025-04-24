@@ -1,14 +1,19 @@
 import streamlit as st
-import pandas as pd
 import numpy as np
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.metrics import accuracy_score, confusion_matrix, mean_absolute_error
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+import warnings
+from sklearn.svm import SVC
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.neighbors import KNeighborsClassifier
 import pickle
 
-# Load model
-model_path = "svc.pkl"  # Ensure this file is uploaded to your repo
-with open(model_path, "rb") as f:
-    rf_model = pickle.load(f)
+warnings.filterwarnings('ignore')
 
-# Load supporting datasets
+# Load data
 df = pd.read_csv('Training.csv.zip')
 sym_des = pd.read_csv('Symptom-severity.csv')
 precautions = pd.read_csv('precautions_df.csv')
@@ -17,84 +22,101 @@ description = pd.read_csv('description.csv')
 medications = pd.read_csv('medications.csv')
 diets = pd.read_csv('diets.csv')
 
-# Prepare training data
+# Prepare data
 X = df.drop('prognosis', axis=1)
 y = df['prognosis']
-from sklearn.preprocessing import LabelEncoder
 label_encoder = LabelEncoder()
-y = label_encoder.fit_transform(y)
+label_encoder.fit(y)
+y = label_encoder.transform(y)
 
-# Dictionary for reverse lookup
-inv_label_dict = {v: k for k, v in enumerate(label_encoder.classes_)}
+X_train, X_valid, y_train, y_valid = train_test_split(X, y, random_state=5, test_size=0.2, train_size=0.8)
 
-# Prepare disease data dictionary
+# Train all models
+models = {
+    'SVC': SVC(kernel='linear'),
+    'Random Forest': RandomForestClassifier(random_state=5, n_estimators=100),
+    'KNeighbors': KNeighborsClassifier(n_neighbors=5),
+    'Gradient Boosting': GradientBoostingClassifier(random_state=5, n_estimators=100),
+    'MultinomialNB': MultinomialNB()
+}
+
+st.title("Disease Prediction System")
+st.write("Training and evaluating all models...")
+
+for name, model in models.items():
+    model.fit(X_train, y_train)
+    preds = model.predict(X_valid)
+    accuracy = accuracy_score(y_valid, preds)
+    cm = confusion_matrix(y_valid, preds)
+    st.subheader(f"{name} Accuracy: {accuracy:.4f}")
+    st.text(f"Confusion Matrix:\n{cm}")
+    st.markdown("---")
+
+# Final model for prediction
+rf_model = RandomForestClassifier(n_estimators=100)
+rf_model.fit(X_train, y_train)
+
+# Save and load model
+with open("svc.pkl", "wb") as f:
+    pickle.dump(rf_model, f)
+
+with open("svc.pkl", "rb") as f:
+    rf_model = pickle.load(f)
+
+# Disease mapping
+dis_ld = medications["Disease"]
+dis_lm = medications["Medication"]
+dis_ldesc = description["Description"].to_list()
+dis_lprec1 = precautions["Precaution_1"]
+dis_lprec2 = precautions["Precaution_2"]
+dis_lprec3 = precautions["Precaution_3"]
+dis_lprec4 = precautions["Precaution_4"]
+dis_lworkout = workout["workout"]
+dis_ldiets = diets["Diet"]
+
 disease_data = {}
-for i in range(len(medications)):
-    disease = medications["Disease"][i]
-    disease_data[disease] = [
-        medications["Medication"][i],
-        description["Description"][i],
-        precautions["Precaution_1"][i],
-        precautions["Precaution_2"][i],
-        precautions["Precaution_3"][i],
-        precautions["Precaution_4"][i],
-        workout["workout"][i],
-        diets["Diet"][i]
-    ]
+for i in range(len(dis_ld)):
+    disease_data[dis_ld[i]] = [dis_lm[i], dis_ldesc[i], dis_lprec1[i], dis_lprec2[i], dis_lprec3[i], dis_lprec4[i], dis_lworkout[i], dis_ldiets[i]]
 
-# Disease prediction function
-def predict_disease(symptoms):
-    symptom_feed = {col: 1 if col in symptoms else 0 for col in X.columns}
-    feed_df = pd.DataFrame([symptom_feed])
-    pred_encoded = rf_model.predict(feed_df)[0]
-    disease_name = label_encoder.inverse_transform([pred_encoded])[0]
-    return disease_name
+yy = label_encoder.inverse_transform(y_valid)
+disease_to_encoded = {}
+for x in range(len(yy)):
+    disease_to_encoded[yy[x]] = y_valid[x]
 
-# Recommendation function
-def get_recommendations(disease):
+# Prediction + recommendation
+def recomm(disease):
     if disease in disease_data:
-        data = disease_data[disease]
-        return {
-            "Medication": data[0],
-            "Description": data[1],
-            "Precautions": data[2:6],
-            "Workout": data[6],
-            "Diet": data[7]
-        }
-    else:
-        return None
+        return disease_data[disease]
+    return ["N/A"] * 8
 
-# Streamlit UI
-st.set_page_config(page_title="Disease Predictor", layout="centered")
-st.title("🩺 Disease Prediction and Recommendation App")
-st.markdown("### Select your symptoms")
+def recomm_s(symptom_lst):
+    symptom_feed = {b: 1 if b in symptom_lst else 0 for b in X_valid.columns}
+    feed_df = pd.DataFrame([list(symptom_feed.values())], columns=X_valid.columns)
+    prediction = rf_model.predict(feed_df)
+    for key in disease_to_encoded:
+        if disease_to_encoded[key] == prediction[0]:
+            return key
+    return "Unknown Disease"
 
-# Symptom selection
-symptoms = st.multiselect("Choose from the list of symptoms", options=X.columns.tolist())
+# Streamlit input section
+st.header("Symptom Input")
+inputtable = list(X_valid.columns)
+selected_symptoms = st.multiselect("Select Symptoms:", inputtable)
 
 if st.button("Predict Disease"):
-    if not symptoms:
+    if not selected_symptoms:
         st.warning("Please select at least one symptom.")
     else:
-        disease = predict_disease(symptoms)
-        st.success(f"Predicted Disease: *{disease}*")
-        rec = get_recommendations(disease)
+        disease = recomm_s(selected_symptoms)
+        medlist, description, prec1, prec2, prec3, prec4, workout, diet = recomm(disease)
 
-        if rec:
-            st.markdown("### 📝 Description")
-            st.info(rec["Description"])
-
-            st.markdown("### 💊 Medications")
-            st.write(rec["Medication"])
-
-            st.markdown("### ⚠ Precautions")
-            for i, prec in enumerate(rec["Precautions"], start=1):
-                st.write(f"{i}. {prec}")
-
-            st.markdown("### 🏋 Workout Suggestion")
-            st.write(rec["Workout"])
-
-            st.markdown("### 🥗 Diet Plan")
-            st.write(rec["Diet"])
-        else:
-            st.error("No recommendations found for the predicted disease.")
+        st.success(f"Predicted Disease: {disease}")
+        st.markdown(f"*Description:* {description}")
+        st.markdown(f"*Medicines:* {medlist}")
+        st.markdown("*Precautions:*")
+        st.markdown(f"- {prec1}")
+        st.markdown(f"- {prec2}")
+        st.markdown(f"- {prec3}")
+        st.markdown(f"- {prec4}")
+        st.markdown(f"*Workout Recommendation:* {workout}")
+        st.markdown(f"*Diet Recommendation:* {diet}")
